@@ -92,18 +92,21 @@ if [ -z "$TEXT" ]; then
   exit 0
 fi
 
-# Always use the clipboard-paste path. It's reliable for every script
-# (Latin / Persian / Arabic / Chinese / emoji / etc.), it's faster than
-# per-character keystroke for anything more than a few words, and it
-# avoids the System Events keystroke quirks with non-ASCII in many apps.
-# Trade-off: we briefly clobber the clipboard, then restore it after the
-# paste settles. Plain-text restore only — image/file clipboards aren't
-# preserved, but that's a rare case for live dictation.
-ORIG_CLIP="$(pbpaste 2>/dev/null || true)"
-
+# Clipboard-paste path: reliable across scripts (Latin / Persian / Arabic
+# / Chinese / emoji), faster than per-character keystroke, and sidesteps
+# System Events quirks with non-ASCII. Transcribed text stays on the
+# clipboard after the paste — no restore.
 printf '%s' "$TEXT" | pbcopy
 PBCOPY_EXIT=$?
 log "pbcopy exit=$PBCOPY_EXIT  clipboard now=[$(pbpaste)]"
+
+# Let the RDP clipboard virtual channel push the new pasteboard contents
+# to the Windows host before we send Cmd+V. Without this, MRD races: the
+# paste keystroke arrives while the clipboard sync is still in-flight,
+# Windows pastes its previous clipboard, and the channel can wedge until
+# the session is reconnected. 0.35 s is well above MRD's typical sync
+# latency and imperceptible for native Mac apps.
+sleep 0.35
 
 # Use `key code 9` (physical V key on US ANSI) instead of `keystroke "v"`.
 # `keystroke` translates a *character* through the ACTIVE keyboard layout,
@@ -113,11 +116,6 @@ log "pbcopy exit=$PBCOPY_EXIT  clipboard now=[$(pbpaste)]"
 /usr/bin/osascript -e 'tell application "System Events" to key code 9 using {command down}'
 OSA_EXIT=$?
 log "osascript Cmd+V (key code 9) exit=$OSA_EXIT"
-
-# Give the focused app a moment to consume the paste before we restore
-# the original clipboard contents.
-sleep 0.4
-printf '%s' "$ORIG_CLIP" | pbcopy
 
 log "done"
 exit 0

@@ -22,6 +22,8 @@ CapsLock tap (again) ->                         -> dictate.sh + large-v3-turbo
 
 **Why paste via key code 9?** macOS's `osascript ... keystroke "v"` translates the *character* "v" through the active keyboard layout to find a key. With Persian / Arabic / Cyrillic / Chinese layouts active, "v" doesn't exist on the layout at all and the synthesized event never registers as Cmd+V. We use `key code 9` instead (the physical V key on US ANSI), which is layout-independent — paste works no matter what input source is active.
 
+**Clipboard behavior.** The transcribed text is written to the clipboard *and* pasted into the focused window — it stays on the clipboard afterwards, so you can paste it again elsewhere. The previous clipboard contents are not preserved.
+
 ## File layout
 
 Everything lives under `~/.hammerspoon/`:
@@ -144,6 +146,7 @@ CapsLock is the hotkey because we hidutil-remap it to F18. To switch to a differ
 - **Transcription is gibberish.** The banner showed the wrong language (or `AUTO` and audio was too short for confident detection). Make sure your macOS input source is set to the language you're speaking *before* you tap CapsLock to start.
 - **Paste fails / nothing appears.** Check `/tmp/whisper-dictate.log` — every run logs the cleaned text, pbcopy result, and osascript exit code. (`tail -50 /tmp/whisper-dictate.log`.)
 - **Pasting into iTerm2 with non-Latin script looks weird.** Terminal emulators don't reliably handle bidi RTL text — use a real text app (TextEdit, Notes, browser) for Persian / Arabic / Hebrew dictation.
+- **Pasting into a Windows RDP session pastes the wrong text, or the RDP clipboard wedges until reconnect.** Microsoft Remote Desktop syncs the Mac pasteboard to the Windows host over a virtual channel asynchronously (~150–500 ms). If the paste keystroke arrives before that sync completes, Windows pastes its previous clipboard, and on some sessions the channel locks up entirely. `dictate.sh` sleeps `0.35 s` between `pbcopy` and Cmd+V to let the sync settle. On high-latency links (VPN, slow Wi-Fi) you may need to bump that — edit the `sleep 0.35` line in `dictate.sh` to `0.6` or higher.
 - **Temporarily disable.** Quit Hammerspoon. Run `hidutil property --set '{"UserKeyMapping":[]}'` to immediately restore CapsLock to normal without reboot.
 
 ## License
