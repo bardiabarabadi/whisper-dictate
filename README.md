@@ -2,49 +2,43 @@
 
 A free, fully **on-device** voice-to-text dictation tool for Apple Silicon Macs.
 
-Two CapsLock gestures, two modes:
+- Tap **CapsLock** → start recording
+- Tap **CapsLock** again → stop, transcribe, paste into the focused window
 
-| Gesture | Mode | Model | Language |
-|---|---|---|---|
-| **Quick tap** (press + release) | English | `small.en` (~466 MB) | always English |
-| **Press & hold** (push-to-talk) | Multilingual | `large-v3-turbo` (~1.5 GB) | follows your active macOS keyboard layout (Persian, Arabic, Chinese, etc.); falls back to whisper's audio-based auto-detection |
-
-Tap-toggle for English (tap to start, tap again to stop). Hold-to-talk for everything else (records while held, transcribes on release).
+Always uses Whisper's `large-v3-turbo` (multilingual). The transcription language is picked from your **active macOS keyboard layout** at the moment you tap. Switch your input source to Persian → next dictation transcribes Farsi. Switch to English → English. Switch to French → French. Anything not in the built-in mapping table falls back to Whisper's audio-based auto-detection.
 
 No cloud calls. No API keys. No subscriptions. Works offline.
 
 ## How it works
 
 ```
-CapsLock tap            -> Hammerspoon F18 hotkey -> sox records WAV
-CapsLock tap (again)    ->                         -> dictate.sh + small.en
-                                                       └─ types into focused window
-
-CapsLock press & hold   -> after 350ms -> sox records WAV
-CapsLock release        ->              -> dictate.sh + large-v3-turbo + active keyboard layout
-                                            └─ types into focused window
+CapsLock tap         -> Hammerspoon F18 hotkey -> sox records WAV
+CapsLock tap (again) ->                         -> dictate.sh + large-v3-turbo
+                                                    └─ language = active keyboard layout
+                                                    └─ pastes into focused window
 ```
 
-Why F18 instead of binding CapsLock directly? CapsLock can't be reliably bound through Hammerspoon — `flagsChanged` events race the OS's caps-lock LED toggle. The canonical workaround: at startup we use `hidutil` to remap CapsLock (HID `0x700000039`) to F18 (HID `0x70000006D`) at the HID layer. macOS never sees a CapsLock press, so the LED never toggles, and Hammerspoon binds F18 with a normal `hs.hotkey`. The remap is reapplied on each Hammerspoon launch (it doesn't persist across reboot — that's why **Hammerspoon must be set to launch at login**).
+**Why F18?** CapsLock can't be reliably bound through Hammerspoon — `flagsChanged` events race the OS's caps-lock LED toggle. The canonical workaround: at startup we use `hidutil` to remap CapsLock (HID `0x700000039`) to F18 (HID `0x70000006D`) at the HID layer. macOS never sees a CapsLock press, so the LED never toggles, and Hammerspoon binds F18 with a normal `hs.hotkey`. The remap is reapplied on each Hammerspoon launch (it doesn't survive reboot — that's why **Hammerspoon must launch at login**).
 
-## File layout (canonical)
+**Why paste via key code 9?** macOS's `osascript ... keystroke "v"` translates the *character* "v" through the active keyboard layout to find a key. With Persian / Arabic / Cyrillic / Chinese layouts active, "v" doesn't exist on the layout at all and the synthesized event never registers as Cmd+V. We use `key code 9` instead (the physical V key on US ANSI), which is layout-independent — paste works no matter what input source is active.
+
+## File layout
 
 Everything lives under `~/.hammerspoon/`:
 
 ```
 ~/.hammerspoon/
-├── init.lua                              # Hammerspoon config (hotkey + state machine)
+├── init.lua                              # active Hammerspoon config (hotkey + state machine)
 └── whisper-dictate/                      # this repo
     ├── dictate.sh                        # transcription + text-injection script
     ├── init.lua                          # repo copy of the Hammerspoon block
     ├── README.md
     ├── .gitignore
     └── models/
-        ├── ggml-small.en.bin             # English model        (~466 MB, gitignored)
-        └── ggml-large-v3-turbo.bin       # multilingual model   (~1.5 GB, gitignored)
+        └── ggml-large-v3-turbo.bin       # multilingual model (~1.5 GB, gitignored)
 ```
 
-There is intentionally **no folder under `~/`** — earlier versions used `~/whisper-dictate/`, which made it tempting to delete and broke dictation. The current layout makes the dependency on `.hammerspoon` explicit.
+There is intentionally **no folder under `~/`** — the dependency on `.hammerspoon` is explicit, and you can't accidentally delete the project from `$HOME` and break dictation.
 
 ## Install (clean machine)
 
@@ -64,17 +58,10 @@ git clone https://github.com/bardiabarabadi/whisper-dictate.git ~/.hammerspoon/w
 chmod +x ~/.hammerspoon/whisper-dictate/dictate.sh
 ```
 
-### 3. Download the two models (~2 GB total)
+### 3. Download the model (~1.5 GB)
 
 ```bash
 mkdir -p ~/.hammerspoon/whisper-dictate/models
-
-# English model (~466 MB)
-curl -L --fail --progress-bar \
-  -o ~/.hammerspoon/whisper-dictate/models/ggml-small.en.bin \
-  "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-small.en.bin"
-
-# Multilingual model (~1.5 GB)
 curl -L --fail --progress-bar \
   -o ~/.hammerspoon/whisper-dictate/models/ggml-large-v3-turbo.bin \
   "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-large-v3-turbo.bin"
@@ -104,8 +91,8 @@ System Settings → Privacy & Security — enable **Hammerspoon** in:
 
 | Pane | Why |
 |---|---|
-| **Accessibility** | Lets osascript send keystrokes / Cmd+V to the focused app |
-| **Input Monitoring** | Required for `hs.hotkey` to receive the F18 (remapped CapsLock) events |
+| **Accessibility** | Lets osascript send Cmd+V to the focused app |
+| **Input Monitoring** | Required for `hs.hotkey` to receive F18 (remapped CapsLock) events |
 | **Microphone** | Lets `sox` (launched by Hammerspoon) capture from the mic |
 
 After granting, **right-click the Hammerspoon menubar icon → Reload Config** (or quit + relaunch).
@@ -113,54 +100,50 @@ After granting, **right-click the Hammerspoon menubar icon → Reload Config** (
 ### 7. Test it
 
 1. Click into any text field.
-2. Tap **CapsLock**. Red **● English** banner. Speak. Tap **CapsLock** again. Your text is typed in.
-3. Press and hold **CapsLock**. Purple **● Multilingual** (or `● FA (multi)` etc.) banner. Speak while holding. Release. Your text is typed in.
+2. Tap **CapsLock**. A red banner shows the detected language (`● EN`, `● FA`, `● AUTO`, etc.).
+3. Speak.
+4. Tap **CapsLock** again. Banner switches to **Transcribing (xx)...**, then your text is pasted into the focused window.
 
-If the multilingual banner shows e.g. `● FA (multi)`, your active keyboard layout was correctly mapped to Persian. Switch keyboard layouts with the macOS input-source switcher (Globe key / Ctrl+Space) before holding to dictate in a different language.
+For non-English: switch your macOS input source (Globe key / Ctrl+Space) **before** tapping CapsLock to start.
 
 ## Configuration
 
-### Change the hold threshold
-
-In `~/.hammerspoon/init.lua`, edit `HOLD_THRESHOLD` (default `0.35` seconds). Lower = easier to trigger hold mode, higher = less likely to trigger it accidentally.
-
-### Change the hotkey
-
-CapsLock is the hotkey because we hidutil-remap it to F18. To switch to a different physical key, replace the `0x700000039` (CapsLock HID) in the `hidutil` line with the HID code of your chosen key — e.g. `0x70000006A` for Right Option, `0x700000064` for the section/§ key. The bound `hs.hotkey.bind({}, "F18", ...)` line stays as is.
-
 ### Add languages to the keyboard-layout map
 
-The mapping table `LAYOUT_TO_LANG` in `~/.hammerspoon/init.lua` translates macOS input-source IDs to Whisper language codes. To find the ID of your current keyboard, open the Hammerspoon Console and run:
+The mapping table `LAYOUT_TO_LANG` in `~/.hammerspoon/init.lua` translates macOS input-source IDs to Whisper language codes. To find the ID of your current keyboard, open the Hammerspoon Console (menubar → Console) and run:
 
 ```lua
 print(hs.keycodes.currentSourceID())
 ```
 
-Add that ID to the table mapped to the appropriate Whisper language code. Anything not mapped falls through to `whisper -l auto`, which sniffs the language from the audio — usually fine but slightly slower and occasionally wrong on short clips.
+Add that ID to the table mapped to the appropriate Whisper language code. Anything not mapped falls through to `whisper -l auto`, which sniffs the language from the audio — usually fine but slightly slower and occasionally wrong on short clips. The banner will show **● AUTO** when no mapping was found.
 
-### Change models
+### Change the model
 
-Edit `MODEL_EN` or `MODEL_MULTI` in `~/.hammerspoon/init.lua`. Available sizes:
+Edit `MODEL` in `~/.hammerspoon/init.lua` to point at a different `ggml-*.bin` file. Sizes & trade-offs (M1 Max latency for ~10 s of audio):
 
-| Model | Size | M1 Max latency (10 s clip) | Notes |
+| Model | Size | Latency | Notes |
 |---|---|---|---|
-| `tiny` / `tiny.en` | 75 MB | ~0.3 s | Fastest, mediocre |
+| `tiny` / `tiny.en` | 75 MB | ~0.3 s | Fastest, mediocre quality |
 | `base` / `base.en` | 142 MB | ~0.5 s | Decent for clean speech |
-| `small` / `small.en` | 466 MB | ~1–1.5 s | **Default for English** |
+| `small` / `small.en` | 466 MB | ~1–1.5 s | Solid for English |
 | `medium` / `medium.en` | 1.5 GB | ~3–4 s | Big quality jump |
 | `large-v3` | 3.1 GB | ~6–8 s | Best, slowest, multilingual |
-| `large-v3-turbo` | 1.5 GB | ~3–4 s | **Default for multilingual** — distilled large, near-best quality |
+| `large-v3-turbo` | 1.5 GB | ~3–4 s | **Default** — distilled large, near-best quality, multilingual |
 
-`.en` variants exist for tiny/base/small/medium and are noticeably more accurate on English-only audio (same size, but model capacity isn't split across 99 languages).
+`.en` variants exist for tiny/base/small/medium and are noticeably more accurate on English-only audio (same size, but model capacity isn't split across 99 languages). Note that English-only models cannot transcribe other languages.
+
+### Change the hotkey
+
+CapsLock is the hotkey because we hidutil-remap it to F18. To switch to a different physical key, replace `0x700000039` (CapsLock HID) in the `hidutil` line with the HID code of your chosen key — e.g. `0x70000006A` for Right Option, `0x700000064` for the section/§ key. The bound `hs.hotkey.bind({}, "F18", ...)` line stays as is.
 
 ## Troubleshooting
 
-- **CapsLock does nothing.** Hammerspoon isn't running, or Accessibility/Input Monitoring isn't granted. Check the menubar; reload config.
+- **CapsLock does nothing.** Hammerspoon isn't running, or Accessibility / Input Monitoring isn't granted. Check the menubar; reload config.
 - **CapsLock toggles caps-lock state again after a reboot.** Hammerspoon didn't launch at login → the hidutil remap wasn't reapplied. Enable launch-at-login in Hammerspoon Preferences.
-- **Hold mode never triggers.** Check the hold threshold (`HOLD_THRESHOLD` in `init.lua`); some users press too quickly. Try `0.5`.
-- **Persian/Arabic transcription is gibberish.** Confirm you have the multilingual model (`ggml-large-v3-turbo.bin`) — `small.en` cannot transcribe non-English. Confirm the recording banner shows `● FA (multi)` (or your language) before speaking.
-- **Wrong language transcribed.** The macOS keyboard layout you had active when starting the recording determines the language. Switch input source before pressing-and-holding CapsLock.
-- **No errors but no text.** Open Hammerspoon Console — `dictate.sh` stderr lands there.
+- **Transcription is gibberish.** The banner showed the wrong language (or `AUTO` and audio was too short for confident detection). Make sure your macOS input source is set to the language you're speaking *before* you tap CapsLock to start.
+- **Paste fails / nothing appears.** Check `/tmp/whisper-dictate.log` — every run logs the cleaned text, pbcopy result, and osascript exit code. (`tail -50 /tmp/whisper-dictate.log`.)
+- **Pasting into iTerm2 with non-Latin script looks weird.** Terminal emulators don't reliably handle bidi RTL text — use a real text app (TextEdit, Notes, browser) for Persian / Arabic / Hebrew dictation.
 - **Temporarily disable.** Quit Hammerspoon. Run `hidutil property --set '{"UserKeyMapping":[]}'` to immediately restore CapsLock to normal without reboot.
 
 ## License

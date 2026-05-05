@@ -8,55 +8,72 @@
 # Examples:
 #   dictate.sh --model models/ggml-small.en.bin --lang en --wav /tmp/r.wav
 #   dictate.sh --model models/ggml-large-v3-turbo.bin --wav /tmp/r.wav
-#     (no --lang -> whisper auto-detects the language from the audio)
+
+# Force a UTF-8 locale. Hammerspoon's hs.task launches subprocesses with
+# a stripped environment (no LANG / LC_*), which makes pbcopy mangle
+# multi-byte UTF-8 (Persian, Arabic, Chinese, emoji, etc.) into something
+# the receiving app can't render. Setting LANG explicitly here keeps
+# Unicode round-tripping intact regardless of who launched us.
+export LANG=en_US.UTF-8
+export LC_ALL=en_US.UTF-8
 
 set -u
 
+LOG=/tmp/whisper-dictate.log
+log() { printf '%s %s\n' "$(date '+%H:%M:%S')" "$*" >> "$LOG"; }
+
 MODEL=""
-LANG=""        # may stay empty -> auto-detect
+LANG_CODE=""
 WAV=""
 
 while [ $# -gt 0 ]; do
   case "$1" in
-    --model) MODEL="$2"; shift 2 ;;
-    --lang)  LANG="$2";  shift 2 ;;
-    --wav)   WAV="$2";   shift 2 ;;
+    --model) MODEL="$2";     shift 2 ;;
+    --lang)  LANG_CODE="$2"; shift 2 ;;
+    --wav)   WAV="$2";       shift 2 ;;
     *) echo "dictate.sh: unknown arg: $1" >&2; exit 64 ;;
   esac
 done
 
+log "----- run -----"
+log "model=$MODEL  lang=${LANG_CODE:-AUTO}  wav=$WAV"
+
 if [ -z "$MODEL" ] || [ ! -f "$MODEL" ]; then
+  log "ERR: invalid --model: $MODEL"
   echo "dictate.sh: missing or invalid --model: $MODEL" >&2
   exit 1
 fi
 if [ -z "$WAV" ] || [ ! -f "$WAV" ]; then
+  log "ERR: invalid --wav: $WAV"
   echo "dictate.sh: missing or invalid --wav: $WAV" >&2
   exit 1
 fi
 
 WHISPER_BIN="/opt/homebrew/bin/whisper-cli"
-OUT_BASE="/tmp/whisper_rec_out"   # whisper-cli appends .txt
+OUT_BASE="/tmp/whisper_rec_out"
 
-# Build whisper args. -nt drops timestamps, -np silences progress noise,
-# -otxt writes plain text to <OUT_BASE>.txt. -l <code> if specified;
-# otherwise pass -l auto so whisper detects from the first ~30 s of audio.
 WHISPER_ARGS=(-m "$MODEL" -f "$WAV" -nt -np -otxt -of "$OUT_BASE")
-if [ -n "$LANG" ]; then
-  WHISPER_ARGS+=(-l "$LANG")
+if [ -n "$LANG_CODE" ]; then
+  WHISPER_ARGS+=(-l "$LANG_CODE")
 else
   WHISPER_ARGS+=(-l auto)
 fi
 
 "$WHISPER_BIN" "${WHISPER_ARGS[@]}" >/dev/null 2>&1
+WHISPER_EXIT=$?
+log "whisper exit=$WHISPER_EXIT"
 
 TXT_FILE="${OUT_BASE}.txt"
 if [ ! -f "$TXT_FILE" ]; then
+  log "ERR: no output file produced"
   echo "dictate.sh: transcription produced no output file" >&2
   exit 2
 fi
 
-# Clean up: drop [BLANK_AUDIO] / [SILENCE] markers, drop bracketed
-# timestamp lines, collapse whitespace.
+log "raw whisper output: $(tr '\n' ' ' < "$TXT_FILE")"
+
+# Drop [BLANK_AUDIO] / [SILENCE] markers and any [HH:MM:SS-->HH:MM:SS]
+# timestamp lines. Collapse whitespace.
 TEXT="$(
   sed -E \
     -e 's/\[BLANK_AUDIO\]//g' \
@@ -68,42 +85,39 @@ TEXT="$(
   | sed -E 's/^[[:space:]]+//; s/[[:space:]]+$//; s/[[:space:]]+/ /g'
 )"
 
-# Nothing to type? exit silently.
+log "cleaned text: [$TEXT]"
+
 if [ -z "$TEXT" ]; then
+  log "INFO: empty after cleanup -> nothing to type"
   exit 0
 fi
 
-# Inject into the focused window.
-# Short ASCII text: keystroke directly via System Events.
-# Longer text OR any non-ASCII (Persian, Arabic, Chinese, etc): use the
-# clipboard-swap + Cmd+V path — System Events keystroke is unreliable
-# with non-Latin scripts and slow for long passages.
-LEN=${#TEXT}
+# Always use the clipboard-paste path. It's reliable for every script
+# (Latin / Persian / Arabic / Chinese / emoji / etc.), it's faster than
+# per-character keystroke for anything more than a few words, and it
+# avoids the System Events keystroke quirks with non-ASCII in many apps.
+# Trade-off: we briefly clobber the clipboard, then restore it after the
+# paste settles. Plain-text restore only — image/file clipboards aren't
+# preserved, but that's a rare case for live dictation.
+ORIG_CLIP="$(pbpaste 2>/dev/null || true)"
 
-if LC_ALL=C grep -q '[^\x00-\x7F]' <<<"$TEXT"; then
-  USE_CLIPBOARD=1
-elif [ "$LEN" -ge 80 ]; then
-  USE_CLIPBOARD=1
-else
-  USE_CLIPBOARD=0
-fi
+printf '%s' "$TEXT" | pbcopy
+PBCOPY_EXIT=$?
+log "pbcopy exit=$PBCOPY_EXIT  clipboard now=[$(pbpaste)]"
 
-escape_for_applescript() {
-  local s="$1"
-  s="${s//\\/\\\\}"
-  s="${s//\"/\\\"}"
-  printf '%s' "$s"
-}
+# Use `key code 9` (physical V key on US ANSI) instead of `keystroke "v"`.
+# `keystroke` translates a *character* through the ACTIVE keyboard layout,
+# so when a Persian / Arabic / Cyrillic / Chinese layout is active, "v" is
+# not on the layout at all and the synthesized event never registers as
+# Cmd+V. `key code 9` sends the physical key event regardless of layout.
+/usr/bin/osascript -e 'tell application "System Events" to key code 9 using {command down}'
+OSA_EXIT=$?
+log "osascript Cmd+V (key code 9) exit=$OSA_EXIT"
 
-if [ "$USE_CLIPBOARD" -eq 0 ]; then
-  ESCAPED="$(escape_for_applescript "$TEXT")"
-  /usr/bin/osascript -e "tell application \"System Events\" to keystroke \"$ESCAPED\""
-else
-  ORIG_CLIP="$(pbpaste 2>/dev/null || true)"
-  printf '%s' "$TEXT" | pbcopy
-  /usr/bin/osascript -e 'tell application "System Events" to keystroke "v" using {command down}'
-  sleep 0.4
-  printf '%s' "$ORIG_CLIP" | pbcopy
-fi
+# Give the focused app a moment to consume the paste before we restore
+# the original clipboard contents.
+sleep 0.4
+printf '%s' "$ORIG_CLIP" | pbcopy
 
+log "done"
 exit 0
