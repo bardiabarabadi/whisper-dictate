@@ -4,10 +4,19 @@
 -- Tap CapsLock once  -> start recording (sox -> /tmp/whisper_rec.wav)
 -- Tap CapsLock again -> stop recording, run whisper.cpp, type result
 --
--- CapsLock cannot be bound via hs.hotkey, so we watch flagsChanged
--- events and detect the moment the capslock flag toggles ON. We
--- return `true` from the eventtap callback to swallow the event,
--- which prevents macOS from toggling the actual capslock state.
+-- Implementation: we cannot reliably bind CapsLock directly (the
+-- eventtap-on-flagsChanged approach races macOS's own LED/state
+-- toggle and the "No Action" setting kills the events entirely).
+--
+-- Instead we use the canonical Hammerspoon trick: at startup,
+-- ask `hidutil` to remap the CapsLock key (HID usage 0x700000039)
+-- to F18 (HID usage 0x70000006D) at the HID layer, BEFORE macOS
+-- ever sees it as CapsLock. F18 isn't on any normal keyboard, so
+-- it's safe to bind globally. Then we bind F18 with hs.hotkey.
+--
+-- The remap persists until the next reboot, so we re-apply it on
+-- every Hammerspoon launch. The CapsLock LED will not flicker
+-- because macOS never receives a CapsLock keypress at all.
 -- =============================================================
 
 -- ---- Config ----------------------------------------------------
@@ -15,6 +24,12 @@ local DICTATE_SCRIPT = os.getenv("HOME") .. "/whisper-dictate/dictate.sh"
 local WAV_PATH       = "/tmp/whisper_rec.wav"
 local SOX_BIN        = "/opt/homebrew/bin/sox"
 -- ---------------------------------------------------------------
+
+-- ---- Remap CapsLock -> F18 at the HID layer --------------------
+-- Source:      0x700000039  (Keyboard Caps Lock)
+-- Destination: 0x70000006D  (Keyboard F18)
+-- Run via /bin/sh so we don't have to worry about quoting the JSON.
+hs.execute([[/usr/bin/hidutil property --set '{"UserKeyMapping":[{"HIDKeyboardModifierMappingSrc":0x700000039,"HIDKeyboardModifierMappingDst":0x70000006D}]}']])
 
 -- Runtime state
 local recording      = false   -- are we currently capturing audio?
@@ -93,38 +108,22 @@ local function stopAndTranscribe()
   end, { DICTATE_SCRIPT, WAV_PATH }):start()
 end
 
--- Eventtap: watch flagsChanged for the CapsLock flag.
--- Returning true swallows the event so macOS does NOT toggle the
--- actual caps-lock state.
-local capsTap = hs.eventtap.new({ hs.eventtap.event.types.flagsChanged }, function(event)
-  local flags = event:getFlags()
-  local keyCode = event:getKeyCode()
-
-  -- keyCode 57 == CapsLock. We only react to the flagsChanged event whose
-  -- keyCode is the capslock key itself (otherwise we'd react to shift/cmd/etc).
-  if keyCode ~= 57 then
-    return false
-  end
-
-  -- A flagsChanged event for CapsLock fires both when it "turns on" and
-  -- "turns off" in the OS's view. We treat *every* such event as a single
-  -- "tap": flip our recording state machine.
+-- Single tap handler: toggle recording state.
+local function toggle()
   if working then
     -- Ignore taps while a transcription is in flight to avoid races.
-    return true
+    return
   end
-
   if not recording then
     startRecording()
   else
     stopAndTranscribe()
   end
+end
 
-  -- Swallow the event entirely so macOS doesn't toggle caps-lock.
-  return true
-end)
-
-capsTap:start()
+-- Bind F18 globally. Because of the hidutil remap above, every CapsLock
+-- press now arrives here as F18 instead.
+hs.hotkey.bind({}, "F18", toggle)
 
 -- Friendly notice on (re)load.
 hs.alert.show("whisper-dictate ready", 1)
