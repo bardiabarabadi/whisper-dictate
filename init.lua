@@ -149,15 +149,19 @@ local function stopAndTranscribe()
   end, args):start()
 end
 
--- Tap-to-toggle on F18 (= remapped CapsLock). One callback is enough —
--- we don't care about press vs release any more.
-hs.hotkey.bind({}, "F18", function()
+-- Tap-to-toggle. F18 is the hidutil-remapped CapsLock; Ctrl+F12 is an
+-- explicit alias for keyboards / RDP sessions where intercepting CapsLock
+-- isn't possible. Both call the same toggle.
+local function toggleDictation()
   if working then return end       -- ignore taps during transcription
   if recording then
     stopAndTranscribe()
   else
     startRecording()
   end
-end)
+end
+
+hs.hotkey.bind({},        "F18", toggleDictation)
+hs.hotkey.bind({"ctrl"},  "F12", toggleDictation)
 
 hs.alert.show("whisper-dictate ready", 1)
