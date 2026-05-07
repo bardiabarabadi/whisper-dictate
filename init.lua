@@ -89,13 +89,71 @@ local soxTask        = nil
 local recordingAlert = nil
 local working        = false   -- true while transcription is in flight
 
+-- ---- Mic selection (menu bar) ----------------------------------
+-- Persisted via hs.settings; nil = use system default input.
+local MIC_SETTING_KEY = "whisperDictate.micDevice"
+
+local function selectedMicName()
+  return hs.settings.get(MIC_SETTING_KEY)
+end
+
+local function listInputDeviceNames()
+  local names = {}
+  for _, d in ipairs(hs.audiodevice.allInputDevices()) do
+    table.insert(names, d:name())
+  end
+  table.sort(names)
+  return names
+end
+
+local micMenu = hs.menubar.new()
+if micMenu then
+  micMenu:setTitle("🎙")
+  micMenu:setTooltip("whisper-dictate input device")
+  micMenu:setMenu(function()
+    local current = selectedMicName()
+    local items = {
+      {
+        title = "System default",
+        checked = (current == nil),
+        fn = function() hs.settings.set(MIC_SETTING_KEY, nil) end,
+      },
+      { title = "-" },
+    }
+    for _, name in ipairs(listInputDeviceNames()) do
+      table.insert(items, {
+        title = name,
+        checked = (current == name),
+        fn = function() hs.settings.set(MIC_SETTING_KEY, name) end,
+      })
+    end
+    return items
+  end)
+end
+
 local function startRecording()
   os.remove(WAV_PATH)
-  soxTask = hs.task.new(SOX_BIN, nil, {
-    "-d", "-t", "wav",
-    "-r", "16000", "-c", "1", "-b", "16", "-e", "signed",
-    WAV_PATH,
-  })
+
+  -- Pick the input. If a specific device is selected but no longer
+  -- attached, fall back to system default rather than failing the run.
+  local mic = selectedMicName()
+  local inputArgs = { "-d" }
+  if mic then
+    for _, name in ipairs(listInputDeviceNames()) do
+      if name == mic then
+        inputArgs = { "-t", "coreaudio", mic }
+        break
+      end
+    end
+  end
+
+  local args = {}
+  for _, v in ipairs(inputArgs) do table.insert(args, v) end
+  for _, v in ipairs({
+    "-t", "wav", "-r", "16000", "-c", "1", "-b", "16", "-e", "signed", WAV_PATH,
+  }) do table.insert(args, v) end
+
+  soxTask = hs.task.new(SOX_BIN, nil, args)
   soxTask:start()
 
   -- Banner shows the detected language so the user knows which one whisper

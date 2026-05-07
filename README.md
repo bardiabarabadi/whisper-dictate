@@ -120,6 +120,10 @@ print(hs.keycodes.currentSourceID())
 
 Add that ID to the table mapped to the appropriate Whisper language code. Anything not mapped falls through to `whisper -l auto`, which sniffs the language from the audio — usually fine but slightly slower and occasionally wrong on short clips. The banner will show **● AUTO** when no mapping was found.
 
+### Choose the input device
+
+A `🎙` menu appears in the macOS menu bar after Hammerspoon loads this config. Click it to pick which microphone to record from — the choice is saved across reloads via `hs.settings`. Pick **System default** to follow the OS-level input device (the same as `sox -d`). If the selected device is unplugged at the moment you start a recording, dictation falls back to the system default for that run.
+
 ### Change the model
 
 Edit `MODEL` in `~/.hammerspoon/init.lua` to point at a different `ggml-*.bin` file. Sizes & trade-offs (M1 Max latency for ~10 s of audio):
