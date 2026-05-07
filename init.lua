@@ -23,6 +23,7 @@ local DICTATE_SCRIPT  = PROJ_DIR .. "/dictate.sh"
 local MODEL           = PROJ_DIR .. "/models/ggml-large-v3-turbo.bin"
 local WAV_PATH        = "/tmp/whisper_rec.wav"
 local SOX_BIN         = "/opt/homebrew/bin/sox"
+local MAX_RECORD_SECS = 3600   -- safety cap: auto-stop after 1 h
 -- ---------------------------------------------------------------
 
 -- ---- Remap CapsLock -> F18 at the HID layer --------------------
@@ -88,6 +89,8 @@ local recording      = false
 local soxTask        = nil
 local recordingAlert = nil
 local working        = false   -- true while transcription is in flight
+local maxDurationTimer = nil   -- fires stopAndTranscribe at MAX_RECORD_SECS
+local stopAndTranscribe        -- forward decl: startRecording's timer needs it
 
 -- ---- Mic selection (menu bar) ----------------------------------
 -- Persisted via hs.settings; nil = use system default input.
@@ -169,10 +172,20 @@ local function startRecording()
   }, 86400)
 
   recording = true
+
+  -- Safety cap: auto-stop and transcribe after MAX_RECORD_SECS so a
+  -- forgotten session doesn't fill /tmp. ~115 MB/h at 16 kHz mono 16-bit.
+  maxDurationTimer = hs.timer.doAfter(MAX_RECORD_SECS, function()
+    if recording then
+      hs.alert.show("Recording cap reached — transcribing", 2)
+      stopAndTranscribe()
+    end
+  end)
 end
 
-local function stopAndTranscribe()
+function stopAndTranscribe()
   recording = false
+  if maxDurationTimer then maxDurationTimer:stop(); maxDurationTimer = nil end
   if soxTask then soxTask:terminate(); soxTask = nil end
   if recordingAlert then
     hs.alert.closeSpecific(recordingAlert)
